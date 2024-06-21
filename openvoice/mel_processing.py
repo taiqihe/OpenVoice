@@ -1,5 +1,6 @@
 import torch
 import torch.utils.data
+import librosa
 from librosa.filters import mel as librosa_mel_fn
 
 MAX_WAV_VALUE = 32768.0
@@ -58,7 +59,7 @@ def spectrogram_torch(y, n_fft, sampling_rate, hop_size, win_size, center=False)
     )
     y = y.squeeze(1)
 
-    spec = torch.stft(
+    spec = torch.view_as_real(torch.stft(
         y,
         n_fft,
         hop_length=hop_size,
@@ -68,8 +69,8 @@ def spectrogram_torch(y, n_fft, sampling_rate, hop_size, win_size, center=False)
         pad_mode="reflect",
         normalized=False,
         onesided=True,
-        return_complex=False,
-    )
+        return_complex=True,
+    ))
 
     spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-6)
     return spec
@@ -111,8 +112,8 @@ def spectrogram_torch_conv(y, n_fft, sampling_rate, hop_size, win_size, center=F
 
 
     # ******************** Verification ************************#
-    spec1 = torch.stft(y.squeeze(1), n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[wnsize_dtype_device],
-                      center=center, pad_mode='reflect', normalized=False, onesided=True, return_complex=False)
+    spec1 = torch.view_as_real(torch.stft(y.squeeze(1), n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[wnsize_dtype_device],
+                      center=center, pad_mode='reflect', normalized=False, onesided=True, return_complex=True))
     assert torch.allclose(spec1, spec2, atol=1e-4)
 
     spec = torch.sqrt(spec2.pow(2).sum(-1) + 1e-6)
@@ -162,7 +163,7 @@ def mel_spectrogram_torch(
     )
     y = y.squeeze(1)
 
-    spec = torch.stft(
+    spec = torch.view_as_real(torch.stft(
         y,
         n_fft,
         hop_length=hop_size,
@@ -172,8 +173,8 @@ def mel_spectrogram_torch(
         pad_mode="reflect",
         normalized=False,
         onesided=True,
-        return_complex=False,
-    )
+        return_complex=True,
+    ))
 
     spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-6)
 

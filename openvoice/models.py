@@ -8,7 +8,8 @@ from openvoice import modules
 from openvoice import attentions
 
 from torch.nn import Conv1d, ConvTranspose1d, Conv2d
-from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
+from torch.nn.utils.parametrizations import weight_norm
+from torch.nn.utils.parametrize import remove_parametrizations
 
 from openvoice.commons import init_weights, get_padding
 
@@ -293,7 +294,7 @@ class Generator(torch.nn.Module):
     def remove_weight_norm(self):
         print("Removing weight norm...")
         for layer in self.ups:
-            remove_weight_norm(layer)
+            remove_parametrizations(layer, "weight")
         for layer in self.resblocks:
             layer.remove_weight_norm()
 

@@ -12,7 +12,6 @@ from torch.nn.utils.parametrizations import weight_norm
 from torch.nn.utils.parametrize import remove_parametrizations
 
 from openvoice.commons import init_weights, get_padding
-import openvoice.monotonic_align as monotonic_align
 
 
 

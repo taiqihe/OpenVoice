@@ -12,6 +12,8 @@ from torch.nn.utils.parametrizations import weight_norm
 from torch.nn.utils.parametrize import remove_parametrizations
 
 from openvoice.commons import init_weights, get_padding
+import openvoice.monotonic_align as monotonic_align
+
 
 
 class TextEncoder(nn.Module):
@@ -305,7 +307,7 @@ class ReferenceEncoder(nn.Module):
     outputs --- [N, ref_enc_gru_size]
     """
 
-    def __init__(self, spec_channels, gin_channels=0, layernorm=True):
+    def __init__(self, spec_channels, gin_channels=0, layernorm=True, gru_layers=1):
         super().__init__()
         self.spec_channels = spec_channels
         ref_enc_filters = [32, 32, 64, 64, 128, 128]
@@ -330,6 +332,7 @@ class ReferenceEncoder(nn.Module):
             input_size=ref_enc_filters[-1] * out_channels,
             hidden_size=256 // 2,
             batch_first=True,
+            num_layers=gru_layers,
         )
         self.proj = nn.Linear(128, gin_channels)
         if layernorm:
@@ -498,3 +501,99 @@ class SynthesizerTrn(nn.Module):
         z_hat = self.flow(z_p, y_mask, g=g_tgt, reverse=True)
         o_hat = self.dec(z_hat * y_mask, g=g_tgt if not self.zero_g else torch.zeros_like(g_tgt))
         return o_hat, y_mask, (z, z_p, z_hat)
+
+class AccentConverter(nn.Module):
+    """
+    Synthesizer for Training
+    """
+
+    def __init__(
+        self,
+        spec_channels,
+        inter_channels,
+        hidden_channels,
+        resblock,
+        resblock_kernel_sizes,
+        resblock_dilation_sizes,
+        upsample_rates,
+        upsample_initial_channel,
+        upsample_kernel_sizes,
+        segment_size=None,
+        n_speakers=256,
+        gin_channels=256,
+        zero_g=True,
+        **kwargs
+    ):
+        super().__init__()
+
+        self.dec = Generator(
+            inter_channels,
+            resblock,
+            resblock_kernel_sizes,
+            resblock_dilation_sizes,
+            upsample_rates,
+            upsample_initial_channel,
+            upsample_kernel_sizes,
+            gin_channels=gin_channels,
+        )
+        self.enc_q = PosteriorEncoder(
+            spec_channels,
+            inter_channels,
+            hidden_channels,
+            5,
+            1,
+            16,
+            gin_channels=gin_channels,
+        )
+
+        self.flow = ResidualCouplingBlock(
+            inter_channels, hidden_channels, 5, 1, 4, gin_channels=gin_channels
+        )
+
+        self.n_speakers = n_speakers
+        if n_speakers == 0:
+            self.ref_enc = ReferenceEncoder(spec_channels, gin_channels)
+        else:
+            self.emb_g = nn.Embedding(n_speakers, gin_channels)
+
+        self.zero_g = zero_g
+        self.segment_size = segment_size
+
+    def forward(self, y, y_lengths, sid=None):
+        if self.n_speakers > 0:
+            g = self.emb_g(sid).unsqueeze(-1)  # [b, h, 1]
+        else:
+            g = self.ref_enc(y.transpose(1, 2)).unsqueeze(-1)
+
+        z, m_q, logs_q, y_mask = self.enc_q(
+            y, y_lengths, g=g if not self.zero_g else torch.zeros_like(g)
+        )
+        z_p = self.flow(z, y_mask, g=g)
+
+        z_slice, ids_slice = commons.rand_slice_segments(
+            z, y_lengths, self.segment_size
+        )
+        o = self.dec(z_slice, g=g if not self.zero_g else torch.zeros_like(g))
+        return (
+            o,
+            ids_slice,
+            y_mask,
+            (z, z_p, m_q, logs_q),
+        )
+
+    def voice_conversion(self, y, y_lengths, sid_src, sid_tgt, tau=1.0):
+        g_src = sid_src
+        g_tgt = sid_tgt
+        z, m_q, logs_q, y_mask = self.enc_q(
+            y,
+            y_lengths,
+            g=g_src if not self.zero_g else torch.zeros_like(g_src),
+            tau=tau,
+        )
+        z_p = self.flow(z, y_mask, g=g_src)
+        z_hat = self.flow(z_p, y_mask, g=g_tgt, reverse=True)
+        o_hat = self.dec(
+            z_hat * y_mask, g=g_tgt if not self.zero_g else torch.zeros_like(g_tgt)
+        )
+        return o_hat, y_mask, (z, z_p, z_hat)
+

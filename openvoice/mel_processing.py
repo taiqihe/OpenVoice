@@ -61,18 +61,20 @@ def spectrogram_torch(y, n_fft, sampling_rate, hop_size, win_size, center=False)
     )
     y = y.squeeze(1)
 
-    spec = torch.view_as_real(torch.stft(
-        y,
-        n_fft,
-        hop_length=hop_size,
-        win_length=win_size,
-        window=hann_window[wnsize_dtype_device],
-        center=center,
-        pad_mode="reflect",
-        normalized=False,
-        onesided=True,
-        return_complex=True,
-    ))
+    spec = torch.view_as_real(
+        torch.stft(
+            y,
+            n_fft,
+            hop_length=hop_size,
+            win_length=win_size,
+            window=hann_window[wnsize_dtype_device],
+            center=center,
+            pad_mode="reflect",
+            normalized=False,
+            onesided=True,
+            return_complex=True,
+        )
+    )
 
     spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-6)
     return spec
@@ -85,13 +87,19 @@ def spectrogram_torch_conv(y, n_fft, sampling_rate, hop_size, win_size, center=F
     #     print('max value is ', torch.max(y))
 
     global hann_window
-    dtype_device = str(y.dtype) + '_' + str(y.device)
-    wnsize_dtype_device = str(win_size) + '_' + dtype_device
+    dtype_device = str(y.dtype) + "_" + str(y.device)
+    wnsize_dtype_device = str(win_size) + "_" + dtype_device
     if wnsize_dtype_device not in hann_window:
-        hann_window[wnsize_dtype_device] = torch.hann_window(win_size).to(dtype=y.dtype, device=y.device)
+        hann_window[wnsize_dtype_device] = torch.hann_window(win_size).to(
+            dtype=y.dtype, device=y.device
+        )
 
-    y = torch.nn.functional.pad(y.unsqueeze(1), (int((n_fft-hop_size)/2), int((n_fft-hop_size)/2)), mode='reflect')
-    
+    y = torch.nn.functional.pad(
+        y.unsqueeze(1),
+        (int((n_fft - hop_size) / 2), int((n_fft - hop_size) / 2)),
+        mode="reflect",
+    )
+
     # ******************** original ************************#
     # y = y.squeeze(1)
     # spec1 = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[wnsize_dtype_device],
@@ -100,8 +108,17 @@ def spectrogram_torch_conv(y, n_fft, sampling_rate, hop_size, win_size, center=F
     # ******************** ConvSTFT ************************#
     freq_cutoff = n_fft // 2 + 1
     fourier_basis = torch.view_as_real(torch.fft.fft(torch.eye(n_fft)))
-    forward_basis = fourier_basis[:freq_cutoff].permute(2, 0, 1).reshape(-1, 1, fourier_basis.shape[1])
-    forward_basis = forward_basis * torch.as_tensor(librosa.util.pad_center(torch.hann_window(win_size), size=n_fft)).float()
+    forward_basis = (
+        fourier_basis[:freq_cutoff]
+        .permute(2, 0, 1)
+        .reshape(-1, 1, fourier_basis.shape[1])
+    )
+    forward_basis = (
+        forward_basis
+        * torch.as_tensor(
+            librosa.util.pad_center(torch.hann_window(win_size), size=n_fft)
+        ).float()
+    )
 
     import torch.nn.functional as F
 
@@ -109,13 +126,30 @@ def spectrogram_torch_conv(y, n_fft, sampling_rate, hop_size, win_size, center=F
     #     signal = F.pad(y[:, None, None, :], (n_fft // 2, n_fft // 2, 0, 0), mode = 'reflect').squeeze(1)
     assert center is False
 
-    forward_transform_squared = F.conv1d(y, forward_basis.to(y.device), stride = hop_size)
-    spec2 = torch.stack([forward_transform_squared[:, :freq_cutoff, :], forward_transform_squared[:, freq_cutoff:, :]], dim = -1)
-
+    forward_transform_squared = F.conv1d(y, forward_basis.to(y.device), stride=hop_size)
+    spec2 = torch.stack(
+        [
+            forward_transform_squared[:, :freq_cutoff, :],
+            forward_transform_squared[:, freq_cutoff:, :],
+        ],
+        dim=-1,
+    )
 
     # ******************** Verification ************************#
-    spec1 = torch.view_as_real(torch.stft(y.squeeze(1), n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[wnsize_dtype_device],
-                      center=center, pad_mode='reflect', normalized=False, onesided=True, return_complex=True))
+    spec1 = torch.view_as_real(
+        torch.stft(
+            y.squeeze(1),
+            n_fft,
+            hop_length=hop_size,
+            win_length=win_size,
+            window=hann_window[wnsize_dtype_device],
+            center=center,
+            pad_mode="reflect",
+            normalized=False,
+            onesided=True,
+            return_complex=True,
+        )
+    )
     assert torch.allclose(spec1, spec2, atol=1e-4)
 
     spec = torch.sqrt(spec2.pow(2).sum(-1) + 1e-6)
@@ -127,7 +161,9 @@ def spec_to_mel_torch(spec, n_fft, num_mels, sampling_rate, fmin, fmax):
     dtype_device = str(spec.dtype) + "_" + str(spec.device)
     fmax_dtype_device = str(fmax) + "_" + dtype_device
     if fmax_dtype_device not in mel_basis:
-        mel = librosa_mel_fn(sampling_rate, n_fft, num_mels, fmin, fmax)
+        mel = librosa_mel_fn(
+            sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax
+        )
         mel_basis[fmax_dtype_device] = torch.from_numpy(mel).to(
             dtype=spec.dtype, device=spec.device
         )
@@ -149,7 +185,9 @@ def mel_spectrogram_torch(
     fmax_dtype_device = str(fmax) + "_" + dtype_device
     wnsize_dtype_device = str(win_size) + "_" + dtype_device
     if fmax_dtype_device not in mel_basis:
-        mel = librosa_mel_fn(sampling_rate, n_fft, num_mels, fmin, fmax)
+        mel = librosa_mel_fn(
+            sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax
+        )
         mel_basis[fmax_dtype_device] = torch.from_numpy(mel).to(
             dtype=y.dtype, device=y.device
         )
@@ -165,18 +203,20 @@ def mel_spectrogram_torch(
     )
     y = y.squeeze(1)
 
-    spec = torch.view_as_real(torch.stft(
-        y,
-        n_fft,
-        hop_length=hop_size,
-        win_length=win_size,
-        window=hann_window[wnsize_dtype_device],
-        center=center,
-        pad_mode="reflect",
-        normalized=False,
-        onesided=True,
-        return_complex=True,
-    ))
+    spec = torch.view_as_real(
+        torch.stft(
+            y,
+            n_fft,
+            hop_length=hop_size,
+            win_length=win_size,
+            window=hann_window[wnsize_dtype_device],
+            center=center,
+            pad_mode="reflect",
+            normalized=False,
+            onesided=True,
+            return_complex=True,
+        )
+    )
 
     spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-6)
 

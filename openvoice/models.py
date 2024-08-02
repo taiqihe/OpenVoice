@@ -181,6 +181,71 @@ class StochasticDurationPredictor(nn.Module):
 			logw = z0
 			return logw
 
+class TransformerCouplingBlock(nn.Module):
+    def __init__(
+        self,
+        channels,
+        hidden_channels,
+        filter_channels,
+        n_heads,
+        n_layers,
+        kernel_size,
+        p_dropout,
+        n_flows=4,
+        gin_channels=0,
+        share_parameter=False,
+    ):
+        super().__init__()
+        self.channels = channels
+        self.hidden_channels = hidden_channels
+        self.kernel_size = kernel_size
+        self.n_layers = n_layers
+        self.n_flows = n_flows
+        self.gin_channels = gin_channels
+
+        self.flows = nn.ModuleList()
+
+        self.wn = (
+            attentions.FFT(
+                hidden_channels,
+                filter_channels,
+                n_heads,
+                n_layers,
+                kernel_size,
+                p_dropout,
+                isflow=True,
+                gin_channels=self.gin_channels,
+            )
+            if share_parameter
+            else None
+        )
+
+        for i in range(n_flows):
+            self.flows.append(
+                modules.TransformerCouplingLayer(
+                    channels,
+                    hidden_channels,
+                    kernel_size,
+                    n_layers,
+                    n_heads,
+                    p_dropout,
+                    filter_channels,
+                    mean_only=True,
+                    wn_sharing_parameter=self.wn,
+                    gin_channels=self.gin_channels,
+                )
+            )
+            self.flows.append(modules.Flip())
+
+    def forward(self, x, x_mask, g=None, reverse=False):
+        if not reverse:
+            for flow in self.flows:
+                x, _ = flow(x, x_mask, g=g, reverse=reverse)
+        else:
+            for flow in reversed(self.flows):
+                x = flow(x, x_mask, g=g, reverse=reverse)
+        return x
+
 class PosteriorEncoder(nn.Module):
     def __init__(
         self,
@@ -654,7 +719,9 @@ class AccentConverter(nn.Module):
         upsample_initial_channel,
         upsample_kernel_sizes,
         segment_size=None,
-        n_speakers=256,
+        se_method="ref_enc",
+        n_speakers=0,
+        extern_se_size=0,
         gin_channels=256,
         zero_g=True,
         **kwargs
@@ -685,20 +752,28 @@ class AccentConverter(nn.Module):
             inter_channels, hidden_channels, 5, 1, 4, gin_channels=gin_channels
         )
 
-        self.n_speakers = n_speakers
-        if n_speakers == 0:
-            self.ref_enc = ReferenceEncoder(spec_channels, gin_channels)
-        else:
+        self.se_method = se_method
+        if se_method == "emb":
+            if n_speakers == 0:
+                raise ValueError("n_speakers should be >0 if using embeddings")
             self.emb_g = nn.Embedding(n_speakers, gin_channels)
+        elif se_method == "ref_enc":
+            self.ref_enc = ReferenceEncoder(spec_channels, gin_channels)
+        elif se_method == "external":
+            self.se_projector = nn.Linear(extern_se_size, gin_channels)
+        else:
+            raise ValueError("Speaker embedding method not recognized.")
 
         self.zero_g = zero_g
         self.segment_size = segment_size
 
-    def forward(self, y, y_lengths, sid=None):
-        if self.n_speakers > 0:
+    def forward(self, y, y_lengths, sid=None, extern_se=None):
+        if self.se_method == "emb":
             g = self.emb_g(sid).unsqueeze(-1)  # [b, h, 1]
-        else:
+        elif self.se_method == "ref_enc":
             g = self.ref_enc(y.transpose(1, 2)).unsqueeze(-1)
+        elif self.se_method == "external":
+            g = self.se_projector(extern_se).unsqueeze(-1)
 
         z, m_q, logs_q, y_mask = self.enc_q(
             y, y_lengths, g=g if not self.zero_g else torch.zeros_like(g)
@@ -716,9 +791,7 @@ class AccentConverter(nn.Module):
             (z, z_p, m_q, logs_q),
         )
 
-    def voice_conversion(self, y, y_lengths, sid_src, sid_tgt, tau=1.0):
-        g_src = sid_src
-        g_tgt = sid_tgt
+    def voice_conversion(self, y, y_lengths, g_src, g_tgt, tau=1.0):
         z, m_q, logs_q, y_mask = self.enc_q(
             y,
             y_lengths,

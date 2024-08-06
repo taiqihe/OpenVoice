@@ -720,6 +720,13 @@ class AccentConverter(nn.Module):
         upsample_kernel_sizes,
         segment_size=None,
         se_method="ref_enc",
+        use_transformer_flow=False,
+        filter_channels=768,
+        n_heads=2,
+        n_layers_trans_flow=3,
+        p_dropout=0.1,
+        n_flow_layer=4,
+        flow_share_parameter=False,
         n_speakers=0,
         extern_se_size=0,
         gin_channels=256,
@@ -747,10 +754,23 @@ class AccentConverter(nn.Module):
             16,
             gin_channels=gin_channels,
         )
-
-        self.flow = ResidualCouplingBlock(
-            inter_channels, hidden_channels, 5, 1, 4, gin_channels=gin_channels
-        )
+        if use_transformer_flow:
+            self.flow = TransformerCouplingBlock(
+                inter_channels,
+                hidden_channels,
+                filter_channels,
+                n_heads,
+                n_layers_trans_flow,
+                5,
+                p_dropout,
+                n_flow_layer,
+                gin_channels=gin_channels,
+                share_parameter=flow_share_parameter,
+            )
+        else:
+            self.flow = ResidualCouplingBlock(
+                inter_channels, hidden_channels, 5, 1, 4, gin_channels=gin_channels
+            )
 
         self.se_method = se_method
         if se_method == "emb":
